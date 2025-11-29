@@ -176,10 +176,10 @@ enum Action {
 
     // each night
     Poisoner {
-        target: Option<PlayerId>,
+        target: PlayerId,
     },
     Monk {
-        protected: Option<PlayerId>,
+        protected: PlayerId,
     },
     ScarletWoman,
     Imp(PlayerId),
@@ -222,15 +222,11 @@ enum Action {
 enum Note {
     Drunk,
     Poisoned,
-    // RedHerring
     MonkProtected,
-    // RavensKeeperDied,
-    DiedTonight, // ???
+    DiedTonight,
 }
 
-// how??? should this be raw info or what it conveys
-//
-// this is just the very basic
+// how to turn into thing
 #[derive(Clone, Debug)]
 enum Info {
     // IsRole(PlayerId, RoleId),
@@ -243,6 +239,7 @@ enum Info {
     Grim(Grimoir),
 }
 
+// stupid TODO change to one and prompt twice
 #[enum_ids::enum_ids]
 enum Prompt {
     Player(PlayerId),
@@ -254,7 +251,6 @@ struct Grimoir {
     actions: Vec<Action>,
     players: Vec<Player>,
     rand: rand::rngs::ThreadRng,
-    // tell: FnMut(&mut Grimoir, Info),
 }
 
 impl Grimoir {
@@ -339,13 +335,39 @@ impl Grimoir {
     }
 
     fn night(&mut self) {
-        todo!()
+        self.exec(RoleId::Poisoner);
+        self.exec(RoleId::Monk);
+        // self.exec(RoleId::ScarletWoman);
+        self.exec(RoleId::Imp);
+        self.exec(RoleId::RavensKeeper);
+        self.exec(RoleId::Empath);
+        self.exec(RoleId::FortuneTeller);
+        self.exec(RoleId::Butler);
+        self.exec(RoleId::Undertaker);
+        self.exec(RoleId::Spy);
     }
 
     fn exec(&mut self, role: RoleId) {
-        let Some(id) = self.get_role(role) else {
+        let Some(mut id) = self.get_role(role) else {
             return;
         };
+
+        // scarlet woman is the only role who can create a double i.e. two demons one of which
+        // might be dead
+        if role == RoleId::Imp && !self.players[id].alive {
+            let Some(scarlet) = self
+                .get_rand(&mut |(_, x): &(PlayerId, &Player)| x.role.id().is_demon() && x.alive)
+            else {
+                return;
+            };
+
+            id = scarlet;
+        }
+
+        // only the ravenskeeper activates after they are dead
+        if !self.players[id].alive && role != RoleId::RavensKeeper {
+            return;
+        }
 
         match role {
             RoleId::WasherWoman | RoleId::Librarian | RoleId::Investigator => {
@@ -530,16 +552,19 @@ impl Grimoir {
                     panic!()
                 };
 
-                self.players[player].alive = false;
+                // TODO or mayor
+                if !self.players[player].notes.contains(&Note::MonkProtected) {
+                    self.players[player].alive = false;
 
-                self.players[player].notes.push(Note::DiedTonight);
+                    self.players[player].notes.push(Note::DiedTonight);
 
-                // if they kill themselves in the night
-                if player == id {
-                    if let Some(minion) = self.get_rand(&mut |(_, x): &(PlayerId, &Player)| {
-                        x.alive && x.role.id().is_minion()
-                    }) {
-                        self.players[minion].role = self.players[id].role.clone();
+                    // if they kill themselves in the night
+                    if player == id {
+                        if let Some(minion) = self.get_rand(&mut |(_, x): &(PlayerId, &Player)| {
+                            x.alive && x.role.id().is_minion()
+                        }) {
+                            self.players[minion].role = self.players[id].role.clone();
+                        }
                     }
                 }
             }
