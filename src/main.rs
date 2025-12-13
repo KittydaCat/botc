@@ -1,3 +1,5 @@
+// add undertaker drunk
+
 #[derive(Clone, Debug)]
 struct Player {
     role: Role,
@@ -34,9 +36,7 @@ enum Role {
     Undertaker {
         last_exec: Option<RoleId>,
     },
-    Monk {
-        protected: Option<PlayerId>,
-    },
+    Monk,
     RavensKeeper,
     Virgin {
         ability_used: bool,
@@ -58,9 +58,7 @@ enum Role {
     Saint,
 
     // minions
-    Poisoner {
-        target: Option<PlayerId>,
-    },
+    Poisoner,
     Spy,
     ScarletWoman,
     Baron,
@@ -346,6 +344,15 @@ impl Grimoir {
     }
 
     fn night(&mut self) {
+        for player in &mut self.players {
+            player.notes = player
+                .notes
+                .iter()
+                .filter(|x| ![Note::MonkProtected, Note::Poisoned].contains(x))
+                .cloned()
+                .collect();
+        }
+
         self.exec(RoleId::Poisoner);
         self.exec(RoleId::Monk);
         // self.exec(RoleId::ScarletWoman);
@@ -359,6 +366,15 @@ impl Grimoir {
     }
 
     fn day(&mut self) {
+        for player in &mut self.players {
+            player.notes = player
+                .notes
+                .iter()
+                .filter(|x| ![Note::ExecToday, Note::DiedTonight].contains(x))
+                .cloned()
+                .collect();
+        }
+
         // slays
         for id in 0..self.players.len() {
             let Prompt::Player(target) = self.prompt(id, PromptId::Player) else {
@@ -422,25 +438,9 @@ impl Grimoir {
                             && !self.players[nom].notes.contains(&Note::Poisoned)
                         {
                             self.actions.push(Action::Virgin(i));
-                            self.actions.push(Action::Executed(i));
 
-                            if let Some(mayor) = self.get_role(RoleId::Mayor) {
-                                self.players[mayor].notes.push(Note::ExecToday);
-                            }
+                            self.execute(i);
 
-                            if let Some(undertaker) = self.get_role(RoleId::Undertaker) {
-                                let role = Some(self.players[i].role.id());
-
-                                let Role::Undertaker { last_exec } =
-                                    &mut self.players[undertaker].role
-                                else {
-                                    panic!()
-                                };
-
-                                *last_exec = role;
-                            }
-
-                            self.players[i].alive = false;
                             let Role::Virgin { ability_used } = &mut self.players[nom].role else {
                                 panic!()
                             };
@@ -490,31 +490,7 @@ impl Grimoir {
 
             if let Some((_, nomed, votes)) = voting_his.iter().max_by_key(|x| x.2).copied() {
                 if votes >= thresh && voting_his.iter().filter(|x| x.2 == votes).count() == 1 {
-                    self.actions.push(Action::Executed(nomed));
-                    self.players[nomed].alive = false;
-
-                    if let Some(mayor) = self.get_role(RoleId::Mayor) {
-                        self.players[mayor].notes.push(Note::ExecToday);
-                    }
-
-                    if let Some(undertaker) = self.get_role(RoleId::Undertaker) {
-                        let role = Some(self.players[nomed].role.id());
-
-                        let Role::Undertaker { last_exec } = &mut self.players[undertaker].role
-                        else {
-                            panic!()
-                        };
-
-                        *last_exec = role;
-                    }
-                    if self.players[nomed].role.id().is_demon() {
-                        if let Some(scarlet) = self.get_role(RoleId::ScarletWoman) {
-                            self.actions.push(Action::ScarletWoman);
-                            self.players[scarlet].role = Role::Imp { bluffs: [None; 3] };
-                        } else {
-                            todo!() // good wins
-                        }
-                    }
+                    self.execute(nomed);
                 }
             }
         }
@@ -530,10 +506,42 @@ impl Grimoir {
         } else if count == 2 {
             todo!() // evil wins
         }
+    }
 
-        // day ends
-        for player in &mut self.players {
-            player.notes.clear();
+    fn execute(&mut self, player: usize) {
+        self.actions.push(Action::Executed(player));
+        self.players[player].alive = false;
+
+        if let Some(mayor) = self.get_role(RoleId::Mayor) {
+            self.players[mayor].notes.push(Note::ExecToday);
+        }
+
+        if let Some(undertaker) = self.get_role(RoleId::Undertaker) {
+            let role = Some(self.players[player].role.id());
+
+            let Role::Undertaker { last_exec } = &mut self.players[undertaker].role else {
+                panic!()
+            };
+
+            *last_exec = role;
+        }
+
+        if let Some(drunk) = self.get_role(RoleId::Drunk) {
+            if let Role::Drunk {
+                role: RoleId::Undertaker,
+            } = self.players[drunk].role
+            {
+                self.players[drunk].notes.push(Note::ExecToday);
+            }
+        }
+
+        if self.players[player].role.id().is_demon() {
+            if let Some(scarlet) = self.get_role(RoleId::ScarletWoman) {
+                self.actions.push(Action::ScarletWoman);
+                self.players[scarlet].role = Role::Imp { bluffs: [None; 3] };
+            } else {
+                todo!() // good wins
+            }
         }
     }
 
@@ -545,13 +553,18 @@ impl Grimoir {
         // scarlet woman is the only role who can create a double i.e. two demons one of which
         // might be dead
         if role == RoleId::Imp && !self.players[id].alive {
-            let Some(scarlet) = self
-                .get_rand(&mut |(_, x): &(PlayerId, &Player)| x.role.id().is_demon() && x.alive)
-            else {
-                return;
+            let Some(scarlet) = self.get_rand_player(&mut |(_, x): &(PlayerId, &Player)| {
+                x.role.id().is_demon() && x.alive
+            }) else {
+                // this means no demon is alive
+                panic!();
             };
 
             id = scarlet;
+        }
+
+        if role == RoleId::Drunk || self.players[id].notes.contains(&Note::Poisoned) {
+            self.poisoned_exec(role);
         }
 
         // only the ravenskeeper activates after they are dead
@@ -560,17 +573,20 @@ impl Grimoir {
         }
 
         match role {
+            // add recuse
             RoleId::WasherWoman | RoleId::Librarian | RoleId::Investigator => {
                 let play1 = self
-                    .get_rand(&mut |(_, x)| match role {
+                    .get_rand_player(&mut |(_, x)| match role {
                         RoleId::WasherWoman => x.role.id().is_townsfolk(),
                         RoleId::Librarian => x.role.id().is_outsider(),
-                        RoleId::Investigator => x.role.id().is_minion(),
+                        RoleId::Investigator => {
+                            x.role.id().is_minion() && x.role.id() != RoleId::Spy
+                        }
                         _ => unreachable!(),
                     })
                     .unwrap();
 
-                let play2 = self.get_rand(&mut |(i, _)| *i != play1).unwrap();
+                let play2 = self.get_rand_player(&mut |(i, _)| *i != play1).unwrap();
 
                 let mut players = vec![play1, play2];
 
@@ -580,14 +596,20 @@ impl Grimoir {
                 self.tell(id, Info::Players(players));
             }
             RoleId::Chef => {
+                let last = self.players.last().unwrap();
+
                 let pairs = self
                     .players
                     .iter()
                     .fold(
-                        (0, self.players.last().unwrap().role.id().is_evil()),
+                        (
+                            0,
+                            last.role.id() == RoleId::Recluse
+                                || (last.role.id().is_evil() && last.role.id() != RoleId::Spy),
+                        ),
                         |(pairs, last), player| {
-                            let evil =
-                                player.role.id().is_evil() && player.role.id() != RoleId::Spy;
+                            let evil = player.role.id() == RoleId::Recluse
+                                || (player.role.id().is_evil() && player.role.id() != RoleId::Spy);
 
                             if last && evil {
                                 (pairs + 1, evil)
@@ -619,12 +641,10 @@ impl Grimoir {
 
                 for i in (1..self.players.len()).rev() {
                     let x = &self.players[(id + i) % self.players.len()];
-                    if self.players[(id + i) % self.players.len()].alive {
-                        if self.players[(id + i) % self.players.len()]
-                            .role
-                            .id()
-                            .is_evil()
-                            && self.players[(id + i) % self.players.len()].role.id() != RoleId::Spy
+
+                    if x.alive {
+                        if x.role.id() == RoleId::Recluse
+                            || (x.role.id().is_evil() && x.role.id() != RoleId::Spy)
                         {
                             count += 1;
                         }
@@ -684,21 +704,9 @@ impl Grimoir {
                 *last_exec = None;
             }
             RoleId::Monk => {
-                let Role::Monk { protected } = self.players[id].role else {
-                    panic!()
-                };
-
-                assert!(protected.is_none());
-
                 let Prompt::Player(player) = self.prompt(id, PromptId::Player) else {
                     panic!()
                 };
-
-                let Role::Monk { ref mut protected } = self.players[id].role else {
-                    panic!()
-                };
-
-                *protected = Some(player);
 
                 self.players[player].notes.push(Note::MonkProtected);
             }
@@ -736,21 +744,9 @@ impl Grimoir {
             // RoleId::Drunk => todo!(), // TODO this should give them fake info this is also equal
             // to the poisoned version of their role
             RoleId::Poisoner => {
-                let Role::Poisoner { target } = self.players[id].role else {
-                    panic!()
-                };
-
-                assert!(target.is_none());
-
                 let Prompt::Player(player) = self.prompt(id, PromptId::Player) else {
                     panic!()
                 };
-
-                let Role::Poisoner { ref mut target } = self.players[id].role else {
-                    panic!()
-                };
-
-                *target = Some(player);
 
                 self.players[player].notes.push(Note::Poisoned);
             }
@@ -775,9 +771,11 @@ impl Grimoir {
 
                     // if they kill themselves in the night
                     if player == id {
-                        if let Some(minion) = self.get_rand(&mut |(_, x): &(PlayerId, &Player)| {
-                            x.alive && x.role.id().is_minion()
-                        }) {
+                        if let Some(minion) =
+                            self.get_rand_player(&mut |(_, x): &(PlayerId, &Player)| {
+                                x.alive && x.role.id().is_minion()
+                            })
+                        {
                             // minions do not demon info
                             self.players[minion].role = Role::Imp { bluffs: [None; 3] };
                         }
@@ -785,7 +783,7 @@ impl Grimoir {
                         todo!()
                     }
                 } else if self.players[player].role.id() == RoleId::Mayor {
-                    let Some(alt) = self.get_rand(&mut |(_, y): &(PlayerId, &Player)| {
+                    let Some(alt) = self.get_rand_player(&mut |(_, y): &(PlayerId, &Player)| {
                         y.alive && y.role.id() != RoleId::Mayor
                     }) else {
                         panic!()
@@ -802,7 +800,7 @@ impl Grimoir {
                         // if they kill themselves in the night
                         if alt == id {
                             if let Some(minion) =
-                                self.get_rand(&mut |(_, x): &(PlayerId, &Player)| {
+                                self.get_rand_player(&mut |(_, x): &(PlayerId, &Player)| {
                                     x.alive && x.role.id().is_minion()
                                 })
                             {
@@ -819,11 +817,158 @@ impl Grimoir {
         }
     }
 
+    fn poisoned_exec(&mut self, mut role: RoleId) {
+        let Some(mut id) = self.get_role(role) else {
+            panic!();
+        };
+
+        if let Role::Drunk { role: drunk_role } = self.players[id].role {
+            role = drunk_role;
+        }
+
+        // scarlet woman is the only role who can create a double i.e. two demons one of which
+        // might be dead
+        if role == RoleId::Imp && !self.players[id].alive {
+            let Some(scarlet) = self.get_rand_player(&mut |(_, x): &(PlayerId, &Player)| {
+                x.role.id().is_demon() && x.alive
+            }) else {
+                // this means no demon is alive
+                panic!();
+            };
+
+            id = scarlet;
+        }
+
+        // only the ravenskeeper activates after they are dead
+        if !self.players[id].alive && role != RoleId::RavensKeeper {
+            return;
+        }
+
+        assert!(self.players[id].notes.contains(&Note::Poisoned));
+
+        match role {
+            // add recuse
+            RoleId::WasherWoman | RoleId::Librarian | RoleId::Investigator => {
+                let play1 = self.get_rand_player(&mut |(_, _)| true).unwrap();
+                let play2 = self.get_rand_player(&mut |(i, _)| *i != play1).unwrap();
+
+                let mut players = vec![play1, play2];
+
+                players.sort();
+
+                // self.tell(id, Info::Role(self.players[play1].role.id()));
+                let roles: Vec<_> = RoleId::all()
+                    .into_iter()
+                    .filter(|x| match role {
+                        RoleId::WasherWoman => x.is_townsfolk(),
+                        RoleId::Librarian => x.is_outsider(),
+                        RoleId::Investigator => x.is_minion(),
+                        _ => panic!(),
+                    })
+                    .collect();
+
+                let role = roles[rand::Rng::random_range(&mut self.rand, 0..roles.len())];
+
+                self.tell(id, Info::Role(role));
+                self.tell(id, Info::Players(players));
+            }
+            RoleId::Chef => {
+                let num = self
+                    .get_rand((self.players.iter().filter(|x| x.role.id().is_evil())).count() - 1)
+                    as u32;
+
+                self.tell(id, Info::Number(num));
+            }
+            RoleId::Empath => {
+                let count = self.get_rand(3) as u32;
+
+                self.actions.push(Action::Empath(count));
+                self.tell(id, Info::Number(count));
+            }
+            RoleId::FortuneTeller => {
+                let Prompt::TwoPlayer(_) = self.prompt(id, PromptId::TwoPlayer) else {
+                    panic!()
+                };
+
+                let num = self.get_rand(2) == 1;
+
+                self.tell(id, Info::Bool(num));
+            }
+            RoleId::Undertaker => {
+                let Role::Undertaker { last_exec } = self.players[id].role else {
+                    panic!()
+                };
+
+                if let Some(_) = last_exec {
+                    let vec: Vec<_> = RoleId::all();
+                    let role = vec[self.get_rand(vec.len())];
+                    self.tell(id, Info::Role(role));
+                }
+
+                let Role::Undertaker { ref mut last_exec } = self.players[id].role else {
+                    panic!()
+                };
+
+                *last_exec = None;
+            }
+            RoleId::Monk => {
+                let Prompt::Player(_) = self.prompt(id, PromptId::Player) else {
+                    panic!()
+                };
+            }
+            RoleId::RavensKeeper => {
+                assert!(self.players[id].notes.contains(&Note::DiedTonight));
+
+                let Prompt::Player(_) = self.prompt(id, PromptId::Player) else {
+                    panic!()
+                };
+
+                let vec: Vec<_> = RoleId::all();
+                let role = vec[self.get_rand(vec.len())];
+                self.tell(id, Info::Role(role));
+            }
+            RoleId::Butler => {
+                let Prompt::Player(player) = self.prompt(id, PromptId::Player) else {
+                    panic!()
+                };
+
+                let Role::Butler { ref mut butlered } = self.players[id].role else {
+                    panic!()
+                };
+
+                *butlered = Some(player);
+            }
+
+            // RoleId::Drunk => todo!(), // TODO this should give them fake info this is also equal
+            // to the poisoned version of their role
+            RoleId::Poisoner => {
+                let Prompt::Player(_) = self.prompt(id, PromptId::Player) else {
+                    panic!()
+                };
+            }
+            RoleId::Spy => {
+                // todo
+                self.tell(id, Info::Grim(self.clone()));
+                self.actions.push(Action::Spy);
+            }
+            RoleId::Imp => {
+                let Prompt::Player(_) = self.prompt(id, PromptId::Player) else {
+                    panic!()
+                };
+            }
+            _ => panic!(),
+        }
+    }
+
     fn get_role(&self, role: RoleId) -> Option<PlayerId> {
         self.players.iter().position(|x| x.role.id() == role)
     }
 
-    fn get_rand(
+    fn get_rand(&mut self, end: usize) -> usize {
+        rand::Rng::random_range(&mut self.rand, 0..end)
+    }
+
+    fn get_rand_player(
         &mut self,
         filter: &mut impl FnMut(&(PlayerId, &Player)) -> bool,
     ) -> Option<PlayerId> {
