@@ -1,4 +1,5 @@
 use rand::{SeedableRng, rngs::SmallRng};
+use ratatui::{Terminal, backend};
 
 mod tui;
 
@@ -350,7 +351,7 @@ impl Grimoir {
         (*self.io.win)(team);
     }
 
-    pub fn first_night(roles: Vec<Role>, seed: Option<u64>, io: GrimIO) -> Grimoir {
+    pub fn new(roles: Vec<Role>, seed: Option<u64>, io: GrimIO) -> Grimoir {
         let players = roles
             .iter()
             .map(|r| Player {
@@ -361,23 +362,27 @@ impl Grimoir {
             })
             .collect();
 
-        let mut grim = Grimoir {
+        Grimoir {
             players,
             io,
             actions: Vec::new(),
             rand: SmallRng::seed_from_u64(seed.unwrap_or(0)),
-        };
+        }
+    }
+
+    pub fn first_night(&mut self) {
+        let roles: Vec<Role> = self.players.iter().map(|x| x.role.clone()).collect();
 
         roles.iter().enumerate().for_each(|(i, x)| {
             if let Role::Drunk { role: role } = x {
-                grim.tell(i, Info::Role(role.clone()));
+                self.tell(i, Info::Role(role.clone()));
             } else {
-                grim.tell(i, Info::Role(x.id()));
+                self.tell(i, Info::Role(x.id()));
             }
         });
 
         // minion and demon info
-        let minions: Vec<_> = grim
+        let minions: Vec<_> = self
             .players
             .iter()
             .enumerate()
@@ -385,26 +390,26 @@ impl Grimoir {
             .map(|(i, _)| i)
             .collect();
 
-        let demon = grim.get_role(RoleId::Imp).unwrap();
+        let demon = self.get_role(RoleId::Imp).unwrap();
 
         // minion info
         minions
             .iter()
-            .for_each(|x| grim.tell(*x, Info::Player(demon)));
+            .for_each(|x| self.tell(*x, Info::Player(demon)));
 
-        grim.actions.push(Action::MinionInfo(demon));
+        self.actions.push(Action::MinionInfo(demon));
 
         // demon info
         let all = RoleId::all();
 
         let mut free_roles: Vec<_> = all
             .into_iter()
-            .filter(|x| x.is_good() && grim.get_role(*x).is_none())
+            .filter(|x| x.is_good() && self.get_role(*x).is_none())
             .collect();
 
         let mut bluffs = [None; 3];
         for i in 0..3 {
-            let bluff = rand::Rng::random_range(&mut grim.rand, 0..free_roles.len());
+            let bluff = rand::Rng::random_range(&mut self.rand, 0..free_roles.len());
 
             if bluff == 0 {
                 break;
@@ -413,8 +418,8 @@ impl Grimoir {
             }
         }
 
-        grim.tell(demon, Info::Players(minions.clone()));
-        grim.tell(
+        self.tell(demon, Info::Players(minions.clone()));
+        self.tell(
             demon,
             Info::Roles(
                 bluffs
@@ -427,19 +432,17 @@ impl Grimoir {
 
         dbg!();
 
-        grim.actions.push(Action::ImpInfo { bluffs, minions });
+        self.actions.push(Action::ImpInfo { bluffs, minions });
 
-        grim.exec(RoleId::Poisoner);
-        grim.exec(RoleId::WasherWoman);
-        grim.exec(RoleId::Librarian);
-        grim.exec(RoleId::Investigator);
-        grim.exec(RoleId::Chef);
-        grim.exec(RoleId::Empath);
-        grim.exec(RoleId::FortuneTeller);
-        grim.exec(RoleId::Butler);
-        grim.exec(RoleId::Spy);
-
-        grim
+        self.exec(RoleId::Poisoner);
+        self.exec(RoleId::WasherWoman);
+        self.exec(RoleId::Librarian);
+        self.exec(RoleId::Investigator);
+        self.exec(RoleId::Chef);
+        self.exec(RoleId::Empath);
+        self.exec(RoleId::FortuneTeller);
+        self.exec(RoleId::Butler);
+        self.exec(RoleId::Spy);
     }
 
     pub fn night(&mut self) {
@@ -1058,29 +1061,31 @@ impl Grimoir {
     }
 }
 
-fn dbg_tell(player: usize, info: Info) {
+pub fn dbg_tell(player: usize, info: Info) {
     println!("Player {player}: {info:?}.");
 }
 
-fn dbg_prompt(player: usize) -> usize {
+pub fn dbg_prompt(player: usize) -> usize {
     println!("PLayer {player} is prompted.");
 
     let mut str = String::new();
 
     std::io::stdin().read_line(&mut str).unwrap();
 
-    str.parse().unwrap()
+    str.trim_end().parse().unwrap()
 }
 
-fn dbg_win(_: bool) {}
+pub fn dbg_win(_: bool) {}
 
 fn main() {
-    let players = dbg!(Grimoir::gen_roles(None));
-    let io = GrimIO {
-        tell: Box::new(dbg_tell),
-        prompt: Box::new(dbg_prompt),
-        win: Box::new(dbg_win),
-    };
+    // let players = dbg!(Grimoir::gen_roles(None));
+    // let io = GrimIO {
+    //     tell: Box::new(dbg_tell),
+    //     prompt: Box::new(dbg_prompt),
+    //     win: Box::new(dbg_win),
+    // };
 
-    let grim = Grimoir::first_night(players, None, io);
+    // let grim = Grimoir::first_night(players, None, io);
+
+    // crate::tui::Tui::new().run(ratatui::init());
 }
