@@ -1,5 +1,9 @@
-use rand::{SeedableRng, rngs::SmallRng};
+use std::convert::Infallible;
+
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 use ratatui::{Terminal, backend};
+
+use crate::tui::Tui;
 
 mod tui;
 
@@ -14,7 +18,7 @@ pub struct Player {
 type PlayerId = usize;
 
 #[enum_ids::enum_ids(derive = "Clone, Copy, PartialEq, Debug")]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub enum Role {
     // townsfolk
     WasherWoman,
@@ -207,25 +211,26 @@ enum Note {
 // how to turn into thing
 #[derive(Clone, Debug)]
 pub enum Info {
-    // IsRole(PlayerId, RoleId),
     Number(u32),
     Bool(bool),
-    Players(Vec<PlayerId>),
+    // Players(Vec<PlayerId>),
     Player(PlayerId),
     Role(RoleId),
-    Roles(Vec<RoleId>),
+    // Roles(Vec<RoleId>),
     Grim(Vec<Player>),
     Slays(PlayerId, PlayerId),
+    Day,
+    Night,
 }
 
-struct GrimIO {
+pub struct GrimIO {
     tell: Box<dyn FnMut(PlayerId, Info)>,
     prompt: Box<dyn FnMut(PlayerId) -> PlayerId>,
-    win: Box<dyn FnMut(bool)>,
+    win: Box<dyn FnMut(bool) -> Infallible>,
 }
 
 impl std::fmt::Debug for GrimIO {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Result::Ok(()) // ????
     }
 }
@@ -264,22 +269,25 @@ impl Grimoir {
             .collect::<Vec<RoleId>>();
 
         for _ in 0..3 {
-            ids.push(minions.remove(rand::random_range(0..minions.len())));
+            ids.push(minions.remove(Rng::random_range(&mut rand, 0..minions.len())));
         }
 
         for _ in 0..(if ids.contains(&RoleId::Baron) { 4 } else { 2 }) {
-            ids.push(outside.remove(rand::random_range(0..outside.len())));
+            ids.push(outside.remove(Rng::random_range(&mut rand, 0..outside.len())));
         }
 
         for _ in 0..(if ids.contains(&RoleId::Baron) { 7 } else { 9 }) {
-            ids.push(towns.remove(rand::random_range(0..towns.len())));
+            ids.push(towns.remove(Rng::random_range(&mut rand, 0..towns.len())));
         }
 
         ids.push(RoleId::Imp);
 
         assert_eq!(ids.len(), 15);
-        for _ in 0..rand::random_range(5..10) {
-            ids.swap(rand::random_range(0..15), rand::random_range(0..15));
+        for _ in 0..Rng::random_range(&mut rand, 5..10) {
+            ids.swap(
+                Rng::random_range(&mut rand, 0..15),
+                Rng::random_range(&mut rand, 0..15),
+            );
         }
 
         ids.iter()
@@ -296,7 +304,7 @@ impl Grimoir {
                             .filter(|x| x.is_good() && **x != RoleId::FortuneTeller)
                             .collect::<Vec<_>>();
 
-                        let r = goods[rand::random_range(0..goods.len())];
+                        let r = goods[Rng::random_range(&mut rand, 0..goods.len())];
 
                         ids.iter().position(|x| x == r).unwrap()
                     },
@@ -314,7 +322,7 @@ impl Grimoir {
                 RoleId::Mayor => Role::Mayor,
                 RoleId::Butler => Role::Butler { butlered: None },
                 RoleId::Drunk => Role::Drunk {
-                    role: { towns.remove(rand::random_range(0..towns.len())) },
+                    role: { towns.remove(Rng::random_range(&mut rand, 0..towns.len())) },
                 },
                 RoleId::Recluse => Role::Recluse,
                 RoleId::Saint => Role::Saint,
@@ -325,7 +333,7 @@ impl Grimoir {
                 RoleId::Imp => Role::Imp {
                     bluffs: {
                         let mut i = towns.iter();
-                        // todo make random
+                        // todo make Rngom
                         [i.next().cloned(), i.next().cloned(), i.next().cloned()]
                     },
                 },
@@ -371,10 +379,12 @@ impl Grimoir {
     }
 
     pub fn first_night(&mut self) {
+        self.tell_all(Info::Night);
+
         let roles: Vec<Role> = self.players.iter().map(|x| x.role.clone()).collect();
 
         roles.iter().enumerate().for_each(|(i, x)| {
-            if let Role::Drunk { role: role } = x {
+            if let Role::Drunk { role } = x {
                 self.tell(i, Info::Role(role.clone()));
             } else {
                 self.tell(i, Info::Role(x.id()));
@@ -393,9 +403,10 @@ impl Grimoir {
         let demon = self.get_role(RoleId::Imp).unwrap();
 
         // minion info
-        minions
-            .iter()
-            .for_each(|x| self.tell(*x, Info::Player(demon)));
+        minions.iter().for_each(|x| {
+            self.tell(*x, Info::Player(demon));
+            self.tell(demon, Info::Player(*x))
+        });
 
         self.actions.push(Action::MinionInfo(demon));
 
@@ -409,28 +420,32 @@ impl Grimoir {
 
         let mut bluffs = [None; 3];
         for i in 0..3 {
-            let bluff = rand::Rng::random_range(&mut self.rand, 0..free_roles.len());
+            let bluff = Rng::random_range(&mut self.rand, 0..free_roles.len());
 
             if bluff == 0 {
                 break;
             } else {
-                bluffs[i] = Some(free_roles.remove(bluff));
+                let bluff = free_roles.remove(bluff);
+
+                bluffs[i] = Some(bluff);
+
+                self.tell(demon, Info::Role(bluff));
             }
         }
 
-        self.tell(demon, Info::Players(minions.clone()));
-        self.tell(
-            demon,
-            Info::Roles(
-                bluffs
-                    .iter()
-                    .filter(|x| x.is_some())
-                    .map(|x| x.unwrap())
-                    .collect(),
-            ),
-        );
+        // self.tell(demon, Info::Players(minions.clone()));
+        // self.tell(
+        //     demon,
+        //     Info::Roles(
+        //         bluffs
+        //             .iter()
+        //             .filter(|x| x.is_some())
+        //             .map(|x| x.unwrap())
+        //             .collect(),
+        //     ),
+        // );
 
-        dbg!();
+        // dbg!();
 
         self.actions.push(Action::ImpInfo { bluffs, minions });
 
@@ -446,6 +461,8 @@ impl Grimoir {
     }
 
     pub fn night(&mut self) {
+        self.tell_all(Info::Night);
+
         for player in &mut self.players {
             player.notes = player
                 .notes
@@ -468,6 +485,18 @@ impl Grimoir {
     }
 
     pub fn day(&mut self) {
+        self.tell_all(Info::Day);
+
+        //self.players.iter().for_each(|x| if x.notes.contains(&Note::DiedTonight) {self.});
+        let mut i = 0;
+        while i < self.players.len() {
+            if self.players[i].notes.contains(&Note::DiedTonight) {
+                self.tell_all(Info::Player(i)); // they died
+            }
+            i += 1;
+        }
+
+        // clears exec and died
         for player in &mut self.players {
             player.notes = player
                 .notes
@@ -482,6 +511,9 @@ impl Grimoir {
             let target = self.prompt(id);
 
             // this is the way to slay no one
+            //
+            // this feels awful but idk a better way
+            // we could do 4bit nums with 15 meaning no kill
             if id != target {
                 self.actions.push(Action::Slay(id, target));
                 self.tell_all(Info::Slays(id, target));
@@ -490,17 +522,15 @@ impl Grimoir {
                     ability_used: false,
                 } = self.players[id].role
                 {
+                    // recluse might also die lol
                     if self.players[target].role.id().is_demon()
                         && !self.players[id].notes.contains(&Note::Poisoned)
                     {
                         self.actions.push(Action::Slayer(target));
                         self.players[target].alive = false;
-                        if let Some(scarlet) = self.get_role(RoleId::ScarletWoman) {
-                            self.actions.push(Action::ScarletWoman);
-                            self.players[scarlet].role = Role::Imp { bluffs: [None; 3] };
-                        } else {
-                            self.win(true);
-                        }
+                        self.tell_all(Info::Player(target));
+
+                        self.demon_kill();
                     }
                 }
 
@@ -607,6 +637,7 @@ impl Grimoir {
 
     fn execute(&mut self, player: usize) {
         self.actions.push(Action::Executed(player));
+        self.tell_all(Info::Player(player));
         self.players[player].alive = false;
 
         if let Some(mayor) = self.get_role(RoleId::Mayor) {
@@ -623,6 +654,7 @@ impl Grimoir {
             *last_exec = role;
         }
 
+        // if there is a drunk who thinks they are the undertaker
         if let Some(drunk) = self.get_role(RoleId::Drunk) {
             if let Role::Drunk {
                 role: RoleId::Undertaker,
@@ -633,12 +665,26 @@ impl Grimoir {
         }
 
         if self.players[player].role.id().is_demon() {
-            if let Some(scarlet) = self.get_role(RoleId::ScarletWoman) {
-                self.actions.push(Action::ScarletWoman);
-                self.players[scarlet].role = Role::Imp { bluffs: [None; 3] };
-            } else {
-                self.win(true);
-            }
+            self.demon_kill();
+        }
+    }
+
+    fn demon_kill(&mut self) {
+        assert!(
+            self.players
+                .iter()
+                .all(|x| !(x.role.id().is_demon() && x.alive))
+        );
+
+        if let Some(scarlet) = self.get_role(RoleId::ScarletWoman)
+            && !self.players[scarlet].notes.contains(&Note::Poisoned)
+        {
+            self.actions.push(Action::ScarletWoman);
+            self.players[scarlet].role = Role::Imp { bluffs: [None; 3] };
+
+            self.tell(scarlet, Info::Role(RoleId::Imp));
+        } else {
+            self.win(true);
         }
     }
 
@@ -662,6 +708,7 @@ impl Grimoir {
 
         if role == RoleId::Drunk || self.players[id].notes.contains(&Note::Poisoned) {
             self.poisoned_exec(role);
+            return;
         }
 
         // only the ravenskeeper activates after they are dead
@@ -670,7 +717,6 @@ impl Grimoir {
         }
 
         match role {
-            // add recuse
             RoleId::WasherWoman | RoleId::Librarian | RoleId::Investigator => {
                 let play1 = self
                     .get_rand_player(&mut |(_, x)| match role {
@@ -690,7 +736,8 @@ impl Grimoir {
                 players.sort();
 
                 self.tell(id, Info::Role(self.players[play1].role.id()));
-                self.tell(id, Info::Players(players));
+                self.tell(id, Info::Player(players[0]));
+                self.tell(id, Info::Player(players[1]));
             }
             RoleId::Chef => {
                 let last = self.players.last().unwrap();
@@ -781,12 +828,12 @@ impl Grimoir {
                     if role == RoleId::Spy {
                         let vec: Vec<_> =
                             RoleId::all().into_iter().filter(|x| x.is_good()).collect();
-                        let seen = vec[rand::Rng::random_range(&mut self.rand, 0..vec.len())];
+                        let seen = vec[Rng::random_range(&mut self.rand, 0..vec.len())];
                         self.tell(id, Info::Role(seen));
                     } else if role == RoleId::Recluse {
                         let vec: Vec<_> =
                             RoleId::all().into_iter().filter(|x| x.is_evil()).collect();
-                        let seen = vec[rand::Rng::random_range(&mut self.rand, 0..vec.len())];
+                        let seen = vec[Rng::random_range(&mut self.rand, 0..vec.len())];
                         self.tell(id, Info::Role(seen));
                     } else {
                         self.tell(id, Info::Role(role));
@@ -811,11 +858,11 @@ impl Grimoir {
 
                 if self.players[player].role.id() == RoleId::Spy {
                     let vec: Vec<_> = RoleId::all().into_iter().filter(|x| x.is_good()).collect();
-                    let role = vec[rand::Rng::random_range(&mut self.rand, 0..vec.len())];
+                    let role = vec[Rng::random_range(&mut self.rand, 0..vec.len())];
                     self.tell(id, Info::Role(role));
                 } else if self.players[player].role.id() == RoleId::Recluse {
                     let vec: Vec<_> = RoleId::all().into_iter().filter(|x| x.is_evil()).collect();
-                    let role = vec[rand::Rng::random_range(&mut self.rand, 0..vec.len())];
+                    let role = vec[Rng::random_range(&mut self.rand, 0..vec.len())];
                     self.tell(id, Info::Role(role));
                 } else {
                     self.tell(id, Info::Role(self.players[player].role.id()));
@@ -846,8 +893,10 @@ impl Grimoir {
                 let player = self.prompt(id);
 
                 if !self.players[player].notes.contains(&Note::MonkProtected)
+                    // if soldier
                     && !(self.players[player].role.id() == RoleId::Soldier
                         && !self.players[player].notes.contains(&Note::Poisoned))
+                    // if mayor
                     && !(self.players[player].role.id() == RoleId::Mayor
                         && !self.players[player].notes.contains(&Note::Poisoned))
                 {
@@ -866,7 +915,7 @@ impl Grimoir {
                             self.players[minion].role = Role::Imp { bluffs: [None; 3] };
                         }
                     } else {
-                        todo!()
+                        self.win(true);
                     }
                 } else if self.players[player].role.id() == RoleId::Mayor {
                     let Some(alt) = self.get_rand_player(&mut |(_, y): &(PlayerId, &Player)| {
@@ -950,10 +999,11 @@ impl Grimoir {
                     })
                     .collect();
 
-                let role = roles[rand::Rng::random_range(&mut self.rand, 0..roles.len())];
+                let role = roles[Rng::random_range(&mut self.rand, 0..roles.len())];
 
                 self.tell(id, Info::Role(role));
-                self.tell(id, Info::Players(players));
+                self.tell(id, Info::Player(players[0]));
+                self.tell(id, Info::Player(players[1]));
             }
             RoleId::Chef => {
                 let num = self
@@ -1037,7 +1087,7 @@ impl Grimoir {
     }
 
     fn get_rand(&mut self, end: usize) -> usize {
-        rand::Rng::random_range(&mut self.rand, 0..end)
+        Rng::random_range(&mut self.rand, 0..end)
     }
 
     fn get_rand_player(
@@ -1075,7 +1125,9 @@ pub fn dbg_prompt(player: usize) -> usize {
     str.trim_end().parse().unwrap()
 }
 
-pub fn dbg_win(_: bool) {}
+pub fn dbg_win(_: bool) -> Infallible {
+    todo!();
+}
 
 fn main() {
     // let players = dbg!(Grimoir::gen_roles(None));
@@ -1087,5 +1139,9 @@ fn main() {
 
     // let grim = Grimoir::first_night(players, None, io);
 
-    // crate::tui::Tui::new().run(ratatui::init());
+    let x = crate::tui::Tui::new();
+
+    Tui::init(x);
+
+    ratatui::restore();
 }
