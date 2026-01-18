@@ -231,6 +231,7 @@ impl SinglePlayerTui {
                             return Some(InputType::OptionPlayer(x));
                         }
                         InputTypeId::Tell => {
+                            /*
                             let x = if true {
                                 // self.input.is_empty() {
                                 None
@@ -270,9 +271,12 @@ impl SinglePlayerTui {
                                 Some((target, player, role))
                             };
 
+                            */
+
                             self.input = String::new();
 
-                            return Some(InputType::Tell(x));
+                            // return Some(InputType::Tell(x));
+                            return Some(InputType::Tell(None));
                         }
                     },
 
