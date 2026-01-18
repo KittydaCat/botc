@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Paragraph, StatefulWidget, Tabs, Widget},
 };
 
-use crate::{GrimIO, Grimoir, Info, PlayerId, RoleId, dbg_win};
+use crate::game::{DebugIO, GrimIO, Grimoir, Info, Never, PlayerId, RoleId};
 
 #[enum_ids::enum_ids]
 enum InputType {
@@ -15,9 +15,66 @@ enum InputType {
     Tell(Option<(PlayerId, PlayerId, RoleId)>),
 }
 
-pub struct Tui {
-    grim: Rc<RefCell<Grimoir>>,
-    player_tabs: Rc<RefCell<[(Vec<Info>, ListState); 15]>>, // probs list state
+struct SinglePlayerIO {
+    tui: Rc<RefCell<Option<SinglePlayerTui>>>,
+}
+
+impl SinglePlayerIO {
+    fn prompt(tui: &mut SinglePlayerTui, player: usize, input: InputTypeId) -> InputType {
+        tui.player_input = Some((player, input));
+
+        tui.run()
+    }
+}
+impl GrimIO for SinglePlayerIO {
+    fn tell(&mut self, player: PlayerId, info: Info) {
+        self.tui.borrow_mut().as_mut().unwrap().player_tabs[player]
+            .0
+            .push(info);
+    }
+
+    fn prompt_player(&mut self, player: PlayerId) -> PlayerId {
+        let InputType::Player(x) = Self::prompt(
+            self.tui.borrow_mut().as_mut().unwrap(),
+            player,
+            InputTypeId::Player,
+        ) else {
+            panic!()
+        };
+        x
+    }
+
+    fn prompt_player_option(&mut self, player: PlayerId) -> Option<PlayerId> {
+        let InputType::OptionPlayer(x) = Self::prompt(
+            self.tui.borrow_mut().as_mut().unwrap(),
+            player,
+            InputTypeId::OptionPlayer,
+        ) else {
+            panic!()
+        };
+        x
+    }
+
+    fn prompt_tell(&mut self, player: PlayerId) -> Option<(PlayerId, PlayerId, RoleId)> {
+        let InputType::Tell(x) = Self::prompt(
+            self.tui.borrow_mut().as_mut().unwrap(),
+            player,
+            InputTypeId::Tell,
+        ) else {
+            panic!()
+        };
+        x
+    }
+
+    fn win(&mut self, _: bool) -> Never {
+        ratatui::restore();
+        todo!();
+    }
+}
+
+pub struct SinglePlayerTui {
+    grim: Rc<RefCell<Grimoir<SinglePlayerIO>>>,
+    player_tabs: [(Vec<Info>, RefCell<ListState>); 15],
     selected_tab: usize,
 
     input: String,
@@ -26,128 +83,62 @@ pub struct Tui {
     terminal: RefCell<ratatui::DefaultTerminal>,
 }
 
-impl Widget for &Tui {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        use ratatui::layout::{
-            Constraint::{Length, Min},
-            Layout,
-        };
-
-        let [tabs, inner, prompt] = Layout::vertical([Length(1), Min(0), Length(1)]).areas(area);
-
-        // render tabs
-        let titles = (0..15).map(|x| ratatui::text::Line::from(x.to_string()));
-        let selected = self.selected_tab;
-        Tabs::new(titles).select(selected).render(tabs, buf);
-
-        // render the info given to to player
-        let items = self.player_tabs.borrow()[self.selected_tab]
-            .0
-            .iter()
-            .map(|x| ListItem::from(format!("{x:?}")))
-            .collect::<Vec<_>>();
-
-        let list = List::new(items);
-
-        StatefulWidget::render(
-            list,
-            inner,
-            buf,
-            &mut self.player_tabs.borrow_mut()[self.selected_tab].1,
-        );
-
-        let prompt_text = match self.player_input.as_ref().unwrap() {
-            (x, InputTypeId::Player) => format!("Player {x}: {}", self.input),
-            (x, InputTypeId::OptionPlayer) => format!("Option Player {x}: {}", self.input),
-            (x, InputTypeId::Tell) => format!("Tell Player {x}: {}", self.input),
-        };
-
-        Paragraph::new(prompt_text).render(prompt, buf);
-    }
-}
-
-impl Tui {
-    fn prompt(&mut self, player: usize, input: InputTypeId) -> InputType {
-        self.player_input = Some((player, input));
-
-        self.run()
-    }
-    // fn prompt(tui: Rc<RefCell<Option<Self>>>, player: usize, input: InputTypeId) -> InputType {
-    //     tui.borrow_mut().as_mut().unwrap().player_input = Some((player, input));
-
-    //     tui.borrow_mut().as_mut().unwrap().run()
-    // }
-
+impl SinglePlayerTui {
     pub fn new() -> Rc<RefCell<Option<Self>>> {
-        let player_tabs: Rc<RefCell<[(Vec<Info>, ListState); 15]>> =
-            Rc::new(RefCell::new(Default::default()));
-
-        let tabs = Rc::clone(&player_tabs);
-
-        // might need to be modified to allow stepping
-        let tell = Box::new(move |player: usize, info: Info| {
-            tabs.borrow_mut()[player].0.push(info);
-        });
-
         let prompt_tui = Rc::new(RefCell::new(None));
 
-        let prompt_player = {
-            let tui = Rc::clone(&prompt_tui);
-            Box::new(move |player: usize| {
-                let InputType::Player(x) = Self::prompt(
-                    tui.borrow_mut().as_mut().unwrap(),
-                    player,
-                    InputTypeId::Player,
-                ) else {
-                    panic!()
-                };
-                x
-            })
-        };
+        // let prompt_player = {
+        //     let tui = Rc::clone(&prompt_tui);
+        //     Box::new(move |player: usize| {
+        //         let InputType::Player(x) = Self::prompt(
+        //             tui.borrow_mut().as_mut().unwrap(),
+        //             player,
+        //             InputTypeId::Player,
+        //         ) else {
+        //             panic!()
+        //         };
+        //         x
+        //     })
+        // };
 
-        let prompt_player_optional = {
-            let tui = Rc::clone(&prompt_tui);
-            Box::new(move |player: usize| {
-                let InputType::OptionPlayer(x) = Self::prompt(
-                    tui.borrow_mut().as_mut().unwrap(),
-                    player,
-                    InputTypeId::OptionPlayer,
-                ) else {
-                    panic!()
-                };
-                x
-            })
-        };
+        // let prompt_player_optional = {
+        //     let tui = Rc::clone(&prompt_tui);
+        //     Box::new(move |player: usize| {
+        //         let InputType::OptionPlayer(x) = Self::prompt(
+        //             tui.borrow_mut().as_mut().unwrap(),
+        //             player,
+        //             InputTypeId::OptionPlayer,
+        //         ) else {
+        //             panic!()
+        //         };
+        //         x
+        //     })
+        // };
 
-        let prompt_tell = {
-            let tui = Rc::clone(&prompt_tui);
-            Box::new(move |player: usize| {
-                let InputType::Tell(x) = Self::prompt(
-                    tui.borrow_mut().as_mut().unwrap(),
-                    player,
-                    InputTypeId::Tell,
-                ) else {
-                    panic!()
-                };
-                x
-            })
-        };
+        // let prompt_tell = {
+        //     let tui = Rc::clone(&prompt_tui);
+        //     Box::new(move |player: usize| {
+        //
+        //     })
+        // };
 
-        let io = GrimIO {
-            tell,
-            win: Box::new(dbg_win),
-            prompt_player,
-            prompt_player_optional,
-            prompt_tell,
-        };
+        // let io = GrimIO {
+        //     tell,
+        //     win: Box::new(Self::win),
+        //     prompt_player,
+        //     prompt_player_optional,
+        //     prompt_tell,
+        // };
 
-        let tui = Tui {
-            grim: Rc::new(RefCell::new(Grimoir::new(
-                Grimoir::gen_roles(None),
+        let tui = SinglePlayerTui {
+            grim: Rc::new(RefCell::new(Grimoir::<SinglePlayerIO>::new(
+                Grimoir::<DebugIO>::gen_roles(None),
                 None,
-                io,
+                SinglePlayerIO {
+                    tui: Rc::clone(&prompt_tui),
+                },
             ))),
-            player_tabs,
+            player_tabs: Default::default(),
             selected_tab: 0,
             input: String::new(),
             player_input: None,
@@ -203,12 +194,14 @@ impl Tui {
                     KeyCode::Right => {
                         self.selected_tab = (self.selected_tab + 1) % 15;
                     }
-                    KeyCode::Down => self.player_tabs.borrow_mut()[self.selected_tab]
+                    KeyCode::Down => self.player_tabs[self.selected_tab]
                         .1
+                        .borrow_mut()
                         .select_next(),
 
-                    KeyCode::Up => self.player_tabs.borrow_mut()[self.selected_tab]
+                    KeyCode::Up => self.player_tabs[self.selected_tab]
                         .1
+                        .borrow_mut()
                         .select_previous(),
 
                     KeyCode::Char('q') => {
@@ -292,5 +285,45 @@ impl Tui {
         }
 
         None
+    }
+}
+
+impl Widget for &SinglePlayerTui {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        use ratatui::layout::{
+            Constraint::{Length, Min},
+            Layout,
+        };
+
+        let [tabs, inner, prompt] = Layout::vertical([Length(1), Min(0), Length(1)]).areas(area);
+
+        // render tabs
+        let titles = (0..15).map(|x| ratatui::text::Line::from(x.to_string()));
+        let selected = self.selected_tab;
+        Tabs::new(titles).select(selected).render(tabs, buf);
+
+        // render the info given to to player
+        let items = self.player_tabs[self.selected_tab]
+            .0
+            .iter()
+            .map(|x| ListItem::from(format!("{x:?}")))
+            .collect::<Vec<_>>();
+
+        let list = List::new(items);
+
+        StatefulWidget::render(
+            list,
+            inner,
+            buf,
+            &mut self.player_tabs[self.selected_tab].1.borrow_mut(),
+        );
+
+        let prompt_text = match self.player_input.as_ref().unwrap() {
+            (x, InputTypeId::Player) => format!("Player {x}: {}", self.input),
+            (x, InputTypeId::OptionPlayer) => format!("Option Player {x}: {}", self.input),
+            (x, InputTypeId::Tell) => format!("Tell Player {x}: {}", self.input),
+        };
+
+        Paragraph::new(prompt_text).render(prompt, buf);
     }
 }
