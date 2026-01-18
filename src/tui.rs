@@ -12,7 +12,7 @@ use crate::game::{DebugIO, GrimIO, Grimoir, Info, Never, PlayerId, RoleId};
 enum InputType {
     Player(PlayerId),
     OptionPlayer(Option<PlayerId>),
-    Tell(Option<(PlayerId, PlayerId, RoleId)>),
+    Tell(Option<(PlayerId, Info)>),
 }
 
 struct SinglePlayerIO {
@@ -55,7 +55,7 @@ impl GrimIO for SinglePlayerIO {
         x
     }
 
-    fn prompt_tell(&mut self, player: PlayerId) -> Option<(PlayerId, PlayerId, RoleId)> {
+    fn prompt_tell(&mut self, player: PlayerId) -> Option<(PlayerId, Info)> {
         let InputType::Tell(x) = Self::prompt(
             self.tui.borrow_mut().as_mut().unwrap(),
             player,
@@ -231,7 +231,8 @@ impl SinglePlayerTui {
                             return Some(InputType::OptionPlayer(x));
                         }
                         InputTypeId::Tell => {
-                            let x = if self.input.is_empty() {
+                            let x = if true {
+                                // self.input.is_empty() {
                                 None
                             } else {
                                 // num num role
